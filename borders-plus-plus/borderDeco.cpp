@@ -73,7 +73,7 @@ void CBordersPlusPlus::draw(PHLMONITOR pMonitor, const float& a) {
     CBorderPPPassElement::SBorderPPData data;
     data.deco = this;
 
-    g_pHyprRenderer->m_renderPass.add(makeShared<CBorderPPPassElement>(data));
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPPPassElement>(data));
 }
 
 void CBordersPlusPlus::drawPass(PHLMONITOR pMonitor, const float& a) {
@@ -137,8 +137,12 @@ void CBordersPlusPlus::drawPass(PHLMONITOR pMonitor, const float& a) {
 
         g_pHyprOpenGL->scissor(nullptr);
 
-        g_pHyprOpenGL->renderBorder(fullBox, CHyprColor{(uint64_t)**PCOLORS[i]}, **PNATURALROUND ? ORIGINALROUND : rounding, ROUNDINGPOWER, THISBORDERSIZE, a,
-                                    **PNATURALROUND ? ORIGINALROUND : -1);
+        g_pHyprOpenGL->renderBorder(fullBox, CHyprColor{(uint64_t)**PCOLORS[i]},
+                                    {.round         = **PNATURALROUND ? ORIGINALROUND : rounding,
+                                     .roundingPower = ROUNDINGPOWER,
+                                     .borderSize    = THISBORDERSIZE,
+                                     .a             = a,
+                                     .outerRound    = **PNATURALROUND ? ORIGINALROUND : -1});
     }
 
     m_seExtents = {{fullThickness, fullThickness}, {fullThickness, fullThickness}};

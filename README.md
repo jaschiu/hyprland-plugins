@@ -2,22 +2,43 @@
 
 This repo houses official plugins for Hyprland.
 
-> [!IMPORTANT]
-> hyprland-plugins only officially supports installation via `hyprpm`.
-> hyprland-plugins follows hyprland-git and requires you to be on hyprland-git
-> or tagged >= v0.33.1.
-
 # Plugin list
  - borders-plus-plus -> adds one or two additional borders to windows
  - csgo-vulkan-fix -> fixes custom resolutions on CS:GO with `-vulkan`
  - hyprbars -> adds title bars to windows
  - hyprexpo -> adds an expo-like workspace overview
+ - hyprfocus -> flashfocus for hyprland
  - hyprscrolling -> adds a scrolling layout to hyprland
  - hyprtrails -> adds smooth trails behind moving windows
  - hyprwinwrap -> clone of xwinwrap, allows you to put any app as a wallpaper
  - xtra-dispatchers -> adds some new dispatchers
 
-# Nix
+# Install
+> [!IMPORTANT]
+> hyprland-plugins only officially supports installation via `hyprpm`.
+> hyprland-plugins follows hyprland-git and requires you to be on hyprland-git
+> or tagged >= v0.33.1.
+
+## Install with `hyprpm`
+
+To install these plugins, from the command line run:
+```bash
+hyprpm update
+```
+Then add this repository:
+```bash
+hyprpm add https://github.com/hyprwm/hyprland-plugins
+```
+then enable the desired plugin with
+```bash
+hyprpm enable <plugin-name>
+```
+
+See the respective README's in the subdirectories for configuration options.
+
+See [the plugins wiki](https://wiki.hyprland.org/Plugins/Using-Plugins/#installing--using-plugins) and `hyprpm -h` for more details.
+
+## Install on Nix
 
 To use these plugins, it's recommended that you are already using the
 [Hyprland flake](https://github.com/hyprwm/Hyprland).
@@ -54,6 +75,32 @@ this:
     ];
   };
 }
+```
+
+If you don't use Home Manager:
+
+```nix
+{ lib, pkgs, inputs, ... }:
+with lib; let
+  hyprPluginPkgs = inputs.hyprland-plugins.packages.${pkgs.system};
+  hypr-plugin-dir = pkgs.symlinkJoin {
+    name = "hyrpland-plugins";
+    paths = with hyprPluginPkgs; [
+      hyprexpo
+      #...plugins
+    ];
+  };
+in
+{
+  environment.sessionVariables = { HYPR_PLUGIN_DIR = hypr-plugin-dir; };
+}
+```
+
+And in `hyprland.conf`
+
+```hyprlang
+# load all the plugins you installed
+exec-once = hyprctl plugin load "$HYPR_PLUGIN_DIR/lib/libhyprexpo.so"
 ```
 
 # Contributing

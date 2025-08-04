@@ -19,7 +19,7 @@
 
 #include "globals.hpp"
 
-// Do NOT change this function.
+// Do NOT change this function
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
     return HYPRLAND_API_VERSION;
 }
@@ -32,34 +32,76 @@ typedef void (*origCommit)(void* owner, void* data);
 
 std::vector<PHLWINDOWREF> bgWindows;
 
-//
 void onNewWindow(PHLWINDOW pWindow) {
-    static auto* const PCLASS = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprwinwrap:class")->getDataStaticPtr();
+    static auto* const PCLASS   = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprwinwrap:class")->getDataStaticPtr();
+    static auto* const PTITLE   = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprwinwrap:title")->getDataStaticPtr();
 
-    if (pWindow->m_initialClass != *PCLASS)
+    static auto* const PSIZEX   = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprwinwrap:size_x")->getDataStaticPtr();
+    static auto* const PSIZEY   = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprwinwrap:size_y")->getDataStaticPtr();
+    static auto* const PPOSX    = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprwinwrap:pos_x")->getDataStaticPtr();
+    static auto* const PPOSY    = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprwinwrap:pos_y")->getDataStaticPtr();
+
+    const std::string classRule(*PCLASS);
+    const std::string titleRule(*PTITLE);
+
+    const bool classMatches = !classRule.empty() && pWindow->m_initialClass == classRule;
+    const bool titleMatches = !titleRule.empty() && pWindow->m_title == titleRule;
+
+    if (!classMatches && !titleMatches)
         return;
 
     const auto PMONITOR = pWindow->m_monitor.lock();
-
     if (!PMONITOR)
         return;
 
     if (!pWindow->m_isFloating)
         g_pLayoutManager->getCurrentLayout()->changeWindowFloatingMode(pWindow);
 
-    pWindow->m_realSize->setValueAndWarp(PMONITOR->m_size);
-    pWindow->m_realPosition->setValueAndWarp(PMONITOR->m_position);
-    pWindow->m_size     = PMONITOR->m_size;
-    pWindow->m_position = PMONITOR->m_position;
-    pWindow->m_pinned   = true;
+    float sx = 100.f, sy = 100.f, px = 0.f, py = 0.f;
+
+    try { sx = std::stof(*PSIZEX); } catch (...) {}
+    try { sy = std::stof(*PSIZEY); } catch (...) {}
+    try { px = std::stof(*PPOSX);  } catch (...) {}
+    try { py = std::stof(*PPOSY);  } catch (...) {}
+
+    sx = std::clamp(sx, 1.f, 100.f);
+    sy = std::clamp(sy, 1.f, 100.f);
+    px = std::clamp(px, 0.f, 100.f);
+    py = std::clamp(py, 0.f, 100.f);
+
+    if (px + sx > 100.f) {
+        Debug::log(WARN, "[hyprwinwrap] size_x (%d) + pos_x (%d) > 100, adjusting size_x to %d", sx, px, 100.f - px);
+        sx = 100.f - px;
+    }
+    if (py + sy > 100.f) {
+        Debug::log(WARN, "[hyprwinwrap] size_y (%d) + pos_y (%d) > 100, adjusting size_y to %d", sy, py, 100.f - py);
+        sy = 100.f - py;
+    }
+
+    const Vector2D monitorSize = PMONITOR->m_size;
+    const Vector2D monitorPos  = PMONITOR->m_position;
+
+    const Vector2D newSize = {
+        static_cast<int>(monitorSize.x * (sx / 100.f)),
+        static_cast<int>(monitorSize.y * (sy / 100.f))
+    };
+
+    const Vector2D newPos = {
+        static_cast<int>(monitorPos.x + (monitorSize.x * (px / 100.f))),
+        static_cast<int>(monitorPos.y + (monitorSize.y * (py / 100.f)))
+    };
+
+    pWindow->m_realSize->setValueAndWarp(newSize);
+    pWindow->m_realPosition->setValueAndWarp(newPos);
+    pWindow->m_size      = newSize;
+    pWindow->m_position  = newPos;
+    pWindow->m_pinned    = true;
     pWindow->sendWindowSize(true);
 
     bgWindows.push_back(pWindow);
-
-    pWindow->m_hidden = true; // no renderino hyprland pls
+    pWindow->m_hidden = true;
 
     g_pInputManager->refocus();
-
     Debug::log(LOG, "[hyprwinwrap] new window moved to bg {}", pWindow);
 }
 
@@ -126,8 +168,18 @@ void onCommit(void* owner, void* data) {
 
 void onConfigReloaded() {
     static auto* const PCLASS = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprwinwrap:class")->getDataStaticPtr();
-    g_pConfigManager->parseKeyword("windowrulev2", std::string{"float, class:^("} + *PCLASS + ")$");
-    g_pConfigManager->parseKeyword("windowrulev2", std::string{"size 100\% 100\%, class:^("} + *PCLASS + ")$");
+    const std::string classRule(*PCLASS);
+    if (!classRule.empty()) {
+        g_pConfigManager->parseKeyword("windowrulev2", std::string{"float, class:^("} + classRule + ")$");
+        g_pConfigManager->parseKeyword("windowrulev2", std::string{"size 100\% 100\%, class:^("} + classRule + ")$");
+    }
+
+    static auto* const PTITLE = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprwinwrap:title")->getDataStaticPtr();
+    const std::string titleRule(*PTITLE);
+    if (!titleRule.empty()) {
+        g_pConfigManager->parseKeyword("windowrulev2", std::string{"float, title:^("} + titleRule + ")$");
+        g_pConfigManager->parseKeyword("windowrulev2", std::string{"size 100\% 100\%, title:^("} + titleRule + ")$");
+    }
 }
 
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
@@ -169,7 +221,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         throw std::runtime_error("hyprwinwrap: hooks failed");
 
     HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprwinwrap:class", Hyprlang::STRING{"kitty-bg"});
+    HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprwinwrap:title", Hyprlang::STRING{""});
 
+    HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprwinwrap:size_x", Hyprlang::STRING{"100"});
+    HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprwinwrap:size_y", Hyprlang::STRING{"100"});
+    HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprwinwrap:pos_x",  Hyprlang::STRING{"0"});
+    HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprwinwrap:pos_y",  Hyprlang::STRING{"0"});
+    
     HyprlandAPI::addNotification(PHANDLE, "[hyprwinwrap] Initialized successfully!", CHyprColor{0.2, 1.0, 0.2, 1.0}, 5000);
 
     return {"hyprwinwrap", "A clone of xwinwrap for Hyprland", "Vaxry", "1.0"};
@@ -178,3 +236,4 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 APICALL EXPORT void PLUGIN_EXIT() {
     ;
 }
+

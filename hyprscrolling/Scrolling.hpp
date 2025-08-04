@@ -29,9 +29,13 @@ struct SColumnData {
     }
 
     void                                  add(PHLWINDOW w);
+    void                                  add(PHLWINDOW w, int after);
     void                                  add(SP<SScrollingWindowData> w);
+    void                                  add(SP<SScrollingWindowData> w, int after);
     void                                  remove(PHLWINDOW w);
     bool                                  has(PHLWINDOW w);
+    size_t                                idx(PHLWINDOW w);
+    size_t                                idxForHeight(float y);
 
     void                                  up(SP<SScrollingWindowData> w);
     void                                  down(SP<SScrollingWindowData> w);
@@ -57,7 +61,7 @@ struct SWorkspaceData {
     int                          leftOffset = 0;
 
     SP<SColumnData>              add();
-    SP<SColumnData>              add(size_t after);
+    SP<SColumnData>              add(int after);
     int64_t                      idx(SP<SColumnData> c);
     void                         remove(SP<SColumnData> c);
     double                       maxWidth();
@@ -69,7 +73,7 @@ struct SWorkspaceData {
     void                         centerCol(SP<SColumnData> c);
     void                         fitCol(SP<SColumnData> c);
 
-    void                         recalculate();
+    void                         recalculate(bool forceInstant = false);
 
     CScrollingLayout*            layout = nullptr;
     WP<SWorkspaceData>           self;
@@ -103,6 +107,7 @@ class CScrollingLayout : public IHyprLayout {
     std::vector<SP<SWorkspaceData>> m_workspaceDatas;
 
     SP<HOOK_CALLBACK_FN>            m_configCallback;
+    SP<HOOK_CALLBACK_FN>            m_focusCallback;
 
     struct {
         std::vector<float> configuredWidths;
@@ -112,7 +117,7 @@ class CScrollingLayout : public IHyprLayout {
     SP<SScrollingWindowData> dataFor(PHLWINDOW w);
     SP<SWorkspaceData>       currentWorkspaceData();
 
-    void                     applyNodeDataToWindow(SP<SScrollingWindowData> node, bool force);
+    void                     applyNodeDataToWindow(SP<SScrollingWindowData> node, bool instant, bool hasWindowsRight, bool hasWindowsLeft);
 
     friend struct SWorkspaceData;
 };

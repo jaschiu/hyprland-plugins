@@ -9,6 +9,7 @@
 #include <hyprland/src/managers/LayoutManager.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/managers/AnimationManager.hpp>
+#include <hyprland/src/protocols/LayerShell.hpp>
 #include <pango/pangocairo.h>
 
 #include "globals.hpp"
@@ -78,6 +79,11 @@ std::string CHyprBar::getDisplayName() {
 }
 
 bool CHyprBar::inputIsValid() {
+    static auto* const PENABLED = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:enabled")->getDataStaticPtr();
+
+    if (!**PENABLED)
+        return false;
+
     if (!m_pWindow->m_workspace || !m_pWindow->m_workspace->isVisible() || !g_pInputManager->m_exclusiveLSes.empty() ||
         (g_pSeatManager->m_seatGrab && !g_pSeatManager->m_seatGrab->accepts(m_pWindow->m_wlSurface->resource())))
         return false;
@@ -85,6 +91,23 @@ bool CHyprBar::inputIsValid() {
     const auto WINDOWATCURSOR = g_pCompositor->vectorToWindowUnified(g_pInputManager->getMouseCoordsInternal(), RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
 
     if (WINDOWATCURSOR != m_pWindow && m_pWindow != g_pCompositor->m_lastWindow)
+        return false;
+
+    // check if input is on top or overlay shell layers
+    auto     PMONITOR     = g_pCompositor->m_lastMonitor.lock();
+    PHLLS    foundSurface = nullptr;
+    Vector2D surfaceCoords;
+
+    // check top layer
+    g_pCompositor->vectorToLayerSurface(g_pInputManager->getMouseCoordsInternal(), &PMONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &surfaceCoords, &foundSurface);
+
+    if (foundSurface)
+        return false;
+    // check overlay layer
+    g_pCompositor->vectorToLayerSurface(g_pInputManager->getMouseCoordsInternal(), &PMONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &surfaceCoords,
+                                        &foundSurface);
+
+    if (foundSurface)
         return false;
 
     return true;
@@ -145,8 +168,10 @@ void CHyprBar::handleDownEvent(SCallbackInfo& info, std::optional<ITouch::SDownE
     static auto* const PBARBUTTONPADDING = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_button_padding")->getDataStaticPtr();
     static auto* const PBARPADDING       = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_padding")->getDataStaticPtr();
     static auto* const PALIGNBUTTONS     = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_buttons_alignment")->getDataStaticPtr();
+    static auto* const PONDOUBLECLICK    = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:on_double_click")->getDataStaticPtr();
 
-    const bool         BUTTONSRIGHT = std::string{*PALIGNBUTTONS} != "left";
+    const bool         BUTTONSRIGHT    = std::string{*PALIGNBUTTONS} != "left";
+    const std::string  ON_DOUBLE_CLICK = *PONDOUBLECLICK;
 
     if (!VECINRECT(COORDS, 0, 0, assignedBoxGlobal().w, **PHEIGHT - 1)) {
 
@@ -175,8 +200,17 @@ void CHyprBar::handleDownEvent(SCallbackInfo& info, std::optional<ITouch::SDownE
     info.cancelled   = true;
     m_bCancelledDown = true;
 
-    if (!doButtonPress(PBARPADDING, PBARBUTTONPADDING, PHEIGHT, COORDS, BUTTONSRIGHT))
-        m_bDragPending = true;
+    if (doButtonPress(PBARPADDING, PBARBUTTONPADDING, PHEIGHT, COORDS, BUTTONSRIGHT))
+        return;
+
+    if (!ON_DOUBLE_CLICK.empty() &&
+        std::chrono::duration_cast<std::chrono::milliseconds>(Time::steadyNow() - m_lastMouseDown).count() < 400 /* Arbitrary delay I found suitable */) {
+        g_pKeybindManager->m_dispatchers["exec"](ON_DOUBLE_CLICK);
+        m_bDragPending = false;
+    } else {
+        m_lastMouseDown = Time::steadyNow();
+        m_bDragPending  = true;
+    }
 }
 
 void CHyprBar::handleUpEvent(SCallbackInfo& info) {
@@ -395,6 +429,7 @@ void CHyprBar::renderBarButtons(const Vector2D& bufferSize, const float scale) {
     static auto* const PBARBUTTONPADDING = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_button_padding")->getDataStaticPtr();
     static auto* const PBARPADDING       = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_padding")->getDataStaticPtr();
     static auto* const PALIGNBUTTONS     = (Hyprlang::STRING const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_buttons_alignment")->getDataStaticPtr();
+    static auto* const PINACTIVECOLOR    = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:inactive_button_color")->getDataStaticPtr();
 
     const bool         BUTTONSRIGHT = std::string{*PALIGNBUTTONS} != "left";
     const auto         visibleCount = getVisibleButtonCount(PBARBUTTONPADDING, PBARPADDING, bufferSize, scale);
@@ -415,9 +450,16 @@ void CHyprBar::renderBarButtons(const Vector2D& bufferSize, const float scale) {
         const auto  scaledButtonSize = button.size * scale;
         const auto  scaledButtonsPad = **PBARBUTTONPADDING * scale;
 
-        const auto  pos = Vector2D{BUTTONSRIGHT ? bufferSize.x - offset - scaledButtonSize / 2.0 : offset + scaledButtonSize / 2.0, bufferSize.y / 2.0}.floor();
+        const auto  pos   = Vector2D{BUTTONSRIGHT ? bufferSize.x - offset - scaledButtonSize / 2.0 : offset + scaledButtonSize / 2.0, bufferSize.y / 2.0}.floor();
+        auto        color = button.bgcol;
 
-        cairo_set_source_rgba(CAIRO, button.bgcol.r, button.bgcol.g, button.bgcol.b, button.bgcol.a);
+        if (**PINACTIVECOLOR > 0) {
+            color = m_bWindowHasFocus ? color : CHyprColor(**PINACTIVECOLOR);
+            if (button.userfg && button.iconTex->m_texID != 0)
+                button.iconTex->destroyTexture();
+        }
+
+        cairo_set_source_rgba(CAIRO, color.r, color.g, color.b, color.a);
         cairo_arc(CAIRO, pos.x, pos.y, scaledButtonSize / 2, 0, 2 * M_PI);
         cairo_fill(CAIRO);
 
@@ -483,7 +525,7 @@ void CHyprBar::renderBarButtonsText(CBox* barBox, const float scale, const float
                     scaledButtonSize};
 
         if (!**PICONONHOVER || (**PICONONHOVER && m_iButtonHoverState > 0))
-            g_pHyprOpenGL->renderTexture(button.iconTex, pos, a);
+            g_pHyprOpenGL->renderTexture(button.iconTex, pos, {.a = a});
         offset += scaledButtonsPad + scaledButtonSize;
 
         bool currentBit = (m_iButtonHoverState & (1 << i)) != 0;
@@ -512,7 +554,7 @@ void CHyprBar::draw(PHLMONITOR pMonitor, const float& a) {
         return;
 
     auto data = CBarPassElement::SBarData{this, a};
-    g_pHyprRenderer->m_renderPass.add(makeShared<CBarPassElement>(data));
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CBarPassElement>(data));
 }
 
 void CHyprBar::renderPass(PHLMONITOR pMonitor, const float& a) {
@@ -525,8 +567,17 @@ void CHyprBar::renderPass(PHLMONITOR pMonitor, const float& a) {
     static auto* const PENABLETITLE      = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_title_enabled")->getDataStaticPtr();
     static auto* const PENABLEBLUR       = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:bar_blur")->getDataStaticPtr();
     static auto* const PENABLEBLURGLOBAL = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "decoration:blur:enabled")->getDataStaticPtr();
+    static auto* const PINACTIVECOLOR    = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprbars:inactive_button_color")->getDataStaticPtr();
 
-    const CHyprColor   DEST_COLOR = m_bForcedBarColor.value_or(**PCOLOR);
+    if (**PINACTIVECOLOR > 0) {
+        bool currentWindowFocus = PWINDOW == g_pCompositor->m_lastWindow.lock();
+        if (currentWindowFocus != m_bWindowHasFocus) {
+            m_bWindowHasFocus = currentWindowFocus;
+            m_bButtonsDirty   = true;
+        }
+    }
+
+    const CHyprColor DEST_COLOR = m_bForcedBarColor.value_or(**PCOLOR);
     if (DEST_COLOR != m_cRealBarColor->goal())
         *m_cRealBarColor = DEST_COLOR;
 
@@ -576,7 +627,7 @@ void CHyprBar::renderPass(PHLMONITOR pMonitor, const float& a) {
         glClearStencil(0);
         glClear(GL_STENCIL_BUFFER_BIT);
 
-        glEnable(GL_STENCIL_TEST);
+        g_pHyprOpenGL->setCapStatus(GL_STENCIL_TEST, true);
 
         glStencilFunc(GL_ALWAYS, 1, -1);
         glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
@@ -584,7 +635,7 @@ void CHyprBar::renderPass(PHLMONITOR pMonitor, const float& a) {
         glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 
         windowBox.translate(WORKSPACEOFFSET).scale(pMonitor->m_scale).round();
-        g_pHyprOpenGL->renderRect(windowBox, CHyprColor(0, 0, 0, 0), scaledRounding, m_pWindow->roundingPower());
+        g_pHyprOpenGL->renderRect(windowBox, CHyprColor(0, 0, 0, 0), {.round = scaledRounding, .roundingPower = m_pWindow->roundingPower()});
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
         glStencilFunc(GL_NOTEQUAL, 1, -1);
@@ -592,9 +643,9 @@ void CHyprBar::renderPass(PHLMONITOR pMonitor, const float& a) {
     }
 
     if (SHOULDBLUR)
-        g_pHyprOpenGL->renderRectWithBlur(titleBarBox, color, scaledRounding, m_pWindow->roundingPower(), a);
+        g_pHyprOpenGL->renderRect(titleBarBox, color, {.round = scaledRounding, .roundingPower = m_pWindow->roundingPower(), .blur = true, .blurA = a});
     else
-        g_pHyprOpenGL->renderRect(titleBarBox, color, scaledRounding, m_pWindow->roundingPower());
+        g_pHyprOpenGL->renderRect(titleBarBox, color, {.round = scaledRounding, .roundingPower = m_pWindow->roundingPower()});
 
     // render title
     if (**PENABLETITLE && (m_szLastTitle != PWINDOW->m_title || m_bWindowSizeChanged || m_pTextTex->m_texID == 0 || m_bTitleColorChanged)) {
@@ -606,21 +657,21 @@ void CHyprBar::renderPass(PHLMONITOR pMonitor, const float& a) {
         // cleanup stencil
         glClearStencil(0);
         glClear(GL_STENCIL_BUFFER_BIT);
-        glDisable(GL_STENCIL_TEST);
+        g_pHyprOpenGL->setCapStatus(GL_STENCIL_TEST, false);
         glStencilMask(-1);
         glStencilFunc(GL_ALWAYS, 1, 0xFF);
     }
 
     CBox textBox = {titleBarBox.x, titleBarBox.y, (int)BARBUF.x, (int)BARBUF.y};
     if (**PENABLETITLE)
-        g_pHyprOpenGL->renderTexture(m_pTextTex, textBox, a);
+        g_pHyprOpenGL->renderTexture(m_pTextTex, textBox, {.a = a});
 
     if (m_bButtonsDirty || m_bWindowSizeChanged) {
         renderBarButtons(BARBUF, pMonitor->m_scale);
         m_bButtonsDirty = false;
     }
 
-    g_pHyprOpenGL->renderTexture(m_pButtonsTex, textBox, a);
+    g_pHyprOpenGL->renderTexture(m_pButtonsTex, textBox, {.a = a});
 
     g_pHyprOpenGL->scissor(nullptr);
 
